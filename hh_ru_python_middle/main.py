@@ -170,6 +170,8 @@ def get_vacancies_all_regions(text="python"):
         df = pd.DataFrame(all_vacancies)
         df.to_excel(OUTPUT_FILE, index=False)
         print(f"Сохранено {len(all_vacancies)} вакансий в {OUTPUT_FILE}")
+    else:
+        print("Нет вакансий для записи в Excel")
 
     return all_vacancies
 
