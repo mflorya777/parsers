@@ -1,7 +1,12 @@
+import json
+import time
+import os
+
 import requests
 
 
 BASE_URL = "https://api.hh.ru/vacancies"
+PROGRESS_FILE = "progress.json"
 
 EXCLUDE_KEYWORDS = [
     "senior", "lead", "тимлид", "руководитель", "архитектор",
@@ -22,6 +27,18 @@ EXCLUDE_KEYWORDS = [
 
 ALLOWED_EXPERIENCE = {"between1And3"}
 MIN_SALARY = 140_000
+
+
+def load_progress():
+    if os.path.exists(PROGRESS_FILE):
+        with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"area": 113, "page": 0}
+
+
+def save_progress(progress):
+    with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
+        json.dump(progress, f, ensure_ascii=False, indent=2)
 
 
 def is_relevant(vacancy: dict) -> bool:
@@ -64,7 +81,8 @@ def is_relevant(vacancy: dict) -> bool:
 
 def get_vacancies(text="python", area=113):
     vacancies = []
-    page = 0
+    progress = load_progress()
+    page = progress.get("page", 0)
     per_page = 100
 
     while True:
@@ -72,10 +90,11 @@ def get_vacancies(text="python", area=113):
             "text": text,
             "area": area,
             "per_page": per_page,
-            "page": page,
+            "page": page
         }
         resp = requests.get(BASE_URL, params=params)
         if resp.status_code == 400:  # достигли лимита страниц
+            print(f"Достигнут лимит API на странице {page}")
             break
         resp.raise_for_status()
 
@@ -89,6 +108,8 @@ def get_vacancies(text="python", area=113):
                 vacancies.append(item)
 
         page += 1
+        save_progress({"area": area, "page": page})
+        time.sleep(0.5)  # пауза, чтобы не перегружать сервер
 
     return vacancies
 
