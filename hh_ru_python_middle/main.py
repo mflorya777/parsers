@@ -3,11 +3,13 @@ import time
 import os
 
 import requests
+import pandas as pd
 
 
 BASE_URL = "https://api.hh.ru/vacancies"
 AREAS_URL = "https://api.hh.ru/areas/113"
 PROGRESS_FILE = "progress.json"
+OUTPUT_FILE = "vacancies.xlsx"
 
 EXCLUDE_KEYWORDS = [
     "senior", "lead", "тимлид", "руководитель", "архитектор",
@@ -99,10 +101,8 @@ def is_relevant(vacancy: dict) -> bool:
     return True
 
 
-def get_vacancies_all_regions(
-    text="python"
-    ):
-    vacancies = []
+def get_vacancies_all_regions(text="python"):
+    all_vacancies = []
     regions = get_regions()
     progress = load_progress()
     start_index = progress.get("area_index", 0)
@@ -122,11 +122,7 @@ def get_vacancies_all_regions(
             }
 
             try:
-                resp = requests.get(
-                    BASE_URL, params=params, headers={
-                        "User-Agent": "Mozilla/5.0"
-                    }
-                    )
+                resp = requests.get(BASE_URL, params=params, headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 400:
                     print(f"Достигнут лимит API на странице {page} региона {region['name']}")
                     break
@@ -143,7 +139,17 @@ def get_vacancies_all_regions(
                 for item in items:
                     try:
                         if is_relevant(item):
-                            vacancies.append(item)
+                            vacancy_data = {
+                                "name": item.get("name"),
+                                "employer": item.get("employer", {}).get("name"),
+                                "area": item.get("area", {}).get("name"),
+                                "experience": item.get("experience", {}).get("name"),
+                                "salary_from": item.get("salary", {}).get("from"),
+                                "salary_to": item.get("salary", {}).get("to"),
+                                "salary_currency": item.get("salary", {}).get("currency"),
+                                "url": item.get("alternate_url")
+                            }
+                            all_vacancies.append(vacancy_data)
                     except Exception as e:
                         print(f"Ошибка обработки вакансии: {e}")
                         continue
@@ -152,25 +158,21 @@ def get_vacancies_all_regions(
                 print(f"Ошибка запроса страницы {page} региона {region['name']}: {e}")
                 break
             finally:
-                # Сохраняем прогресс после каждой попытки
-                save_progress(
-                    {
-                        "area_index": idx,
-                        "page": page,
-                    }
-                )
+                save_progress({"area_index": idx, "page": page})
 
             page += 1
             time.sleep(0.5)
 
-        # После окончания региона сбрасываем страницу
         page = 0
 
-    return vacancies
+    # Записываем в Excel
+    if all_vacancies:
+        df = pd.DataFrame(all_vacancies)
+        df.to_excel(OUTPUT_FILE, index=False)
+        print(f"Сохранено {len(all_vacancies)} вакансий в {OUTPUT_FILE}")
+
+    return all_vacancies
 
 
 if __name__ == "__main__":
-    vacancies = get_vacancies_all_regions("python")
-    for v in vacancies:
-        area_name = v["area"]["name"] if "area" in v else "Неизвестно"
-        print(f"{v['name']} | {v['employer']['name']} | {area_name} | {v['alternate_url']}")
+    get_vacancies_all_regions("python")
