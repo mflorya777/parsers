@@ -6,12 +6,13 @@ import requests
 
 
 BASE_URL = "https://api.hh.ru/vacancies"
+AREAS_URL = "https://api.hh.ru/areas/113"
 PROGRESS_FILE = "progress.json"
 
 EXCLUDE_KEYWORDS = [
     "senior", "lead", "тимлид", "руководитель", "архитектор",
     "ml", "machine learning", "data science", "аналитик",
-    "java", "c++", "c#", "php", "javascript", "node", "go",
+    "java", "c++", "c#", "php", "javascript", "node", "go", "js",
     "ruby", "scala", "kotlin", "swift", "QA", "тестирование",
     "тестированию", "devops", "qa", "технической поддержки",
     "junior", "Специалист поддержки", "второй линии",
@@ -22,7 +23,7 @@ EXCLUDE_KEYWORDS = [
     "администратор", "админ", "Сетевой администратор", "директор",
     "стажер", "стажёр", "data scientist", "Инженер-сборщик", "трейдер",
     "Инженер-сборщик FPV дронов", "Marketing Data Analyst", "Математик-программист",
-    "геофизик", "Геофизик – интерпретатор данных ГИС"
+    "геофизик", "Геофизик – интерпретатор данных ГИС",
 ]
 
 ALLOWED_EXPERIENCE = {"between1And3"}
@@ -39,6 +40,25 @@ def load_progress():
 def save_progress(progress):
     with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
         json.dump(progress, f, ensure_ascii=False, indent=2)
+
+
+def get_regions():
+    """Получаем все регионы России (id и name)."""
+    resp = requests.get(AREAS_URL)
+    resp.raise_for_status()
+    data = resp.json()
+    regions = []
+
+    # В API структура: 'areas' содержит регионы и подрегионы
+    def extract_regions(area):
+        if "areas" in area and area["areas"]:
+            for sub in area["areas"]:
+                extract_regions(sub)
+        else:
+            regions.append({"id": area["id"], "name": area["name"]})
+
+    extract_regions(data)
+    return regions
 
 
 def is_relevant(vacancy: dict) -> bool:
@@ -79,43 +99,78 @@ def is_relevant(vacancy: dict) -> bool:
     return True
 
 
-def get_vacancies(text="python", area=113):
+def get_vacancies_all_regions(
+    text="python"
+    ):
     vacancies = []
+    regions = get_regions()
     progress = load_progress()
+    start_index = progress.get("area_index", 0)
     page = progress.get("page", 0)
     per_page = 100
 
-    while True:
-        params = {
-            "text": text,
-            "area": area,
-            "per_page": per_page,
-            "page": page
-        }
-        resp = requests.get(BASE_URL, params=params)
-        if resp.status_code == 400:  # достигли лимита страниц
-            print(f"Достигнут лимит API на странице {page}")
-            break
-        resp.raise_for_status()
+    for idx in range(start_index, len(regions)):
+        region = regions[idx]
+        print(f"Парсим регион {region['name']} ({region['id']})")
 
-        data = resp.json()
-        items = data.get("items", [])
-        if not items:
-            break
+        while True:
+            params = {
+                "text": text,
+                "area": region["id"],
+                "per_page": per_page,
+                "page": page
+            }
 
-        for item in items:
-            if is_relevant(item):
-                vacancies.append(item)
+            try:
+                resp = requests.get(
+                    BASE_URL, params=params, headers={
+                        "User-Agent": "Mozilla/5.0"
+                    }
+                    )
+                if resp.status_code == 400:
+                    print(f"Достигнут лимит API на странице {page} региона {region['name']}")
+                    break
+                if resp.status_code == 403:
+                    print(f"Пропускаем регион {region['name']} ({region['id']}) — доступ запрещён")
+                    break
+                resp.raise_for_status()
 
-        page += 1
-        save_progress({"area": area, "page": page})
-        time.sleep(0.5)  # пауза, чтобы не перегружать сервер
+                data = resp.json()
+                items = data.get("items", [])
+                if not items:
+                    break
+
+                for item in items:
+                    try:
+                        if is_relevant(item):
+                            vacancies.append(item)
+                    except Exception as e:
+                        print(f"Ошибка обработки вакансии: {e}")
+                        continue
+
+            except requests.exceptions.RequestException as e:
+                print(f"Ошибка запроса страницы {page} региона {region['name']}: {e}")
+                break
+            finally:
+                # Сохраняем прогресс после каждой попытки
+                save_progress(
+                    {
+                        "area_index": idx,
+                        "page": page,
+                    }
+                )
+
+            page += 1
+            time.sleep(0.5)
+
+        # После окончания региона сбрасываем страницу
+        page = 0
 
     return vacancies
 
 
 if __name__ == "__main__":
-    vacancies = get_vacancies("python", area=113)
+    vacancies = get_vacancies_all_regions("python")
     for v in vacancies:
         area_name = v["area"]["name"] if "area" in v else "Неизвестно"
         print(f"{v['name']} | {v['employer']['name']} | {area_name} | {v['alternate_url']}")
